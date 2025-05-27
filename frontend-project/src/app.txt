@@ -1,0 +1,1111 @@
+import React, { useState, useRef, useEffect } from "react";
+import { 
+  BrowserRouter as Router, 
+  Routes, 
+  Route,
+  Link,
+  useParams,
+  useNavigate
+} from "react-router-dom";
+import {
+  DocumentArrowUpIcon,
+  ChatBubbleLeftRightIcon,
+  BookOpenIcon,
+  ArrowDownTrayIcon,
+  ShareIcon,
+  ClockIcon,
+  Cog6ToothIcon,
+  DocumentTextIcon
+} from "@heroicons/react/24/outline";
+import { AuthProvider, useAuth } from './AuthContext';
+import ProtectedRoute from './ProtectedRoute';
+
+const API_BASE_URL = "http://localhost:5000";
+
+function Home() {
+  const { user, logout } = useAuth();
+  const [file, setFile] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [inputMessage, setInputMessage] = useState("");
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [isSummarizing, setIsSummarizing] = useState(false);
+  const [summary, setSummary] = useState(null);
+  const [documentId, setDocumentId] = useState(null);
+  const [uploadSuccess, setUploadSuccess] = useState(false);
+  const fileInputRef = useRef(null);
+  const chatEndRef = useRef(null);
+
+  useEffect(() => {
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages]);
+
+  const handleFileUpload = async (event) => {
+    const uploadedFile = event.target.files[0];
+    if (uploadedFile) {
+      setFile(uploadedFile);
+      setIsProcessing(true);
+      setSummary(null);
+  
+      try {
+        const formData = new FormData();
+        formData.append("file", uploadedFile);
+  
+        const headers = {};
+        if (user?.token) {
+          headers['Authorization'] = `Bearer ${user.token}`;
+        }
+  
+        const response = await fetch(`${API_BASE_URL}/summarize`, {
+          method: "POST",
+          body: formData,
+          headers,
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || "Failed to process document");
+        }
+        const data = await response.json();
+        
+        if (data.doc_id) {
+          setDocumentId(data.doc_id);
+          setUploadSuccess(true);
+          setMessages([
+            { text: "Document uploaded successfully. Click 'Generate Summary' to analyze it or ask questions directly.", sender: "bot" }
+          ]);
+        }
+      } catch (error) {
+        console.error("Error uploading file:", error);
+        setMessages([
+          { text: `Error: ${error.message || "Failed to process document"}`, sender: "bot" }
+        ]);        
+      } finally {
+        setIsProcessing(false);
+      }
+    }
+  };
+
+  const handleGenerateSummary = async () => {
+    if (!documentId) return;
+    
+    setIsSummarizing(true);
+    
+    try {
+      const response = await fetch(`${API_BASE_URL}/generate_summary`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          doc_id: documentId,
+        }),
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to generate summary");
+      }
+      
+      const data = await response.json();
+      
+      setSummary({
+        text: data.summary,
+        advantages: data.advantages || [],
+        disadvantages: data.disadvantages || []
+      });
+      
+      setMessages(prevMessages => [
+        ...prevMessages, 
+        { text: "Summary generated successfully. You can now ask questions about the document.", sender: "bot" }
+      ]);
+    } catch (error) {
+      console.error("Error generating summary:", error);
+      setMessages(prevMessages => [
+        ...prevMessages,
+        { text: `Error: ${error.message || "Failed to generate summary"}`, sender: "bot" }
+      ]);
+    } finally {
+      setIsSummarizing(false);
+    }
+  };
+
+  const handleSendMessage = async (e) => {
+    e.preventDefault();
+    if (!inputMessage.trim()) return;
+
+    const userMessage = { text: inputMessage, sender: "user" };
+    setMessages((prevMessages) => [...prevMessages, userMessage]);
+    setInputMessage("");
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/ask`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          question: userMessage.text,
+          ...(documentId && { doc_id: documentId }),
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to get answer");
+      }
+
+      const data = await response.json();
+      
+      const botMessage = { 
+        text: data.answer, 
+        sender: "bot" 
+      };
+      setMessages((prevMessages) => [...prevMessages, botMessage]);
+    } catch (error) {
+      console.error("Error sending message:", error);
+      const errorMessage = { 
+        text:`Error: ${error.message || "Failed to get response"}`, 
+        sender: "bot" 
+      };
+      setMessages((prevMessages) => [...prevMessages, errorMessage]);
+    }
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFileUpload({ target: { files: e.dataTransfer.files } });
+    }
+  };
+
+  const downloadSummary = () => {
+    if (!summary) return;
+    const blob = new Blob([summary.text], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${file?.name.replace(/\.[^/.]+$/, "") || "summary"}_summary.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const getFileTypeDisplay = (fileName) => {
+    if (!fileName) return null;
+    
+    const extension = fileName.split('.').pop().toLowerCase();
+    
+    const fileTypeInfo = {
+      pdf: { label: "PDF", bgColor: "bg-red-100", textColor: "text-red-800" },
+      docx: { label: "DOCX", bgColor: "bg-blue-100", textColor: "text-blue-800" },
+      doc: { label: "DOC", bgColor: "bg-blue-100", textColor: "text-blue-800" },
+      txt: { label: "TXT", bgColor: "bg-green-100", textColor: "text-green-800" },
+    };
+    
+    const fileType = fileTypeInfo[extension] || { 
+      label: extension.toUpperCase(), 
+      bgColor: "bg-gray-100", 
+      textColor: "text-gray-800" 
+    };
+    
+    return (
+      <span className={`inline-block px-2 py-1 text-xs font-medium rounded ${fileType.bgColor} ${fileType.textColor}`}>
+        {fileType.label}
+      </span>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+      <header className="bg-gradient-to-r from-purple-600 to-blue-600 shadow-lg">
+        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+          <Link to="/" className="flex items-center space-x-3">
+            <BookOpenIcon className="w-8 h-8 text-white" />
+            <h1 className="text-2xl font-bold text-white">ResearchAI</h1>
+          </Link>
+          
+          <div className="flex items-center space-x-6">
+            <nav className="hidden md:flex space-x-6">
+              <Link 
+                to="/history" 
+                className="text-white hover:text-purple-200 transition-colors flex items-center"
+              >
+                <ClockIcon className="w-5 h-5 mr-1" />
+                History
+              </Link>
+              <Link 
+                to="/settings" 
+                className="text-white hover:text-purple-200 transition-colors flex items-center"
+              >
+                <Cog6ToothIcon className="w-5 h-5 mr-1" />
+                Settings
+              </Link>
+            </nav>
+            {user ? (
+              <button
+                onClick={logout}
+                className="bg-white text-purple-600 px-6 py-2 rounded-full hover:bg-gray-100 shadow-sm transition-all"
+              >
+                Logout
+              </button>
+            ) : (
+              <Link
+                to="/login"
+                className="bg-white text-purple-600 px-6 py-2 rounded-full hover:bg-gray-100 shadow-sm transition-all"
+              >
+                Login
+              </Link>
+            )}
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8 grid grid-cols-1 lg:grid-cols-3 gap-8">
+        {/* Left Column - Upload + Chat */}
+        <div className="lg:col-span-1 space-y-6">
+          {/* Upload Section */}
+          <div className="bg-white rounded-xl shadow-md p-6">
+            <h2 className="text-xl font-semibold mb-4 text-gray-800 flex items-center">
+              <DocumentArrowUpIcon className="w-5 h-5 mr-2" />
+              Upload Research Paper
+            </h2>
+            <div
+              className="flex items-center justify-center w-full h-64 border-2 border-dashed border-gray-300 rounded-xl cursor-pointer bg-gray-50 hover:bg-gray-100 transition duration-300"
+              onClick={() => fileInputRef.current.click()}
+              onDragOver={handleDragOver}
+              onDrop={handleDrop}
+            >
+              {isProcessing ? (
+                <div className="text-center">
+                  <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-indigo-500 mx-auto mb-4"></div>
+                  <p className="text-gray-600">Processing your document...</p>
+                </div>
+              ) : file ? (
+                <div className="text-center p-4">
+                  <DocumentArrowUpIcon className="w-12 h-12 text-green-500 mx-auto mb-3" />
+                  <p className="font-medium text-gray-800 truncate">{file.name}</p>
+                  <div className="mt-2">
+                    {getFileTypeDisplay(file.name)}
+                    <span className="text-sm text-gray-500 ml-2">
+                      {(file.size / (1024 * 1024)).toFixed(2)} MB
+                    </span>
+                  </div>
+                  <button
+                    className="mt-3 text-sm text-indigo-600 hover:text-indigo-800"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setFile(null);
+                      setSummary(null);
+                      setMessages([]);
+                      setDocumentId(null);
+                      setUploadSuccess(false);
+                    }}
+                  >
+                    Change file
+                  </button>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                  <DocumentArrowUpIcon className="w-12 h-12 text-gray-400 mb-4" />
+                  <p className="mb-2 text-sm text-gray-500">
+                    <span className="font-semibold">Click to upload</span> or drag and drop
+                  </p>
+                  <p className="text-xs text-gray-500">PDF, DOCX, TXT (MAX. 10MB)</p>
+                </div>
+              )}
+              <input
+                type="file"
+                ref={fileInputRef}
+                className="hidden"
+                onChange={handleFileUpload}
+                accept=".pdf,.docx,.doc,.txt"
+              />
+            </div>
+
+            {/* Generate Summary Button */}
+            {uploadSuccess && !summary && (
+              <div className="mt-4">
+                <button
+                  onClick={handleGenerateSummary}
+                  disabled={isSummarizing}
+                  className="w-full bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 disabled:bg-indigo-300 flex items-center justify-center"
+                >
+                  {isSummarizing ? (
+                    <>
+                      <div className="animate-spin h-4 w-4 border-t-2 border-b-2 border-white rounded-full mr-2"></div>
+                      Generating Summary...
+                    </>
+                  ) : (
+                    <>
+                      <DocumentTextIcon className="w-5 h-5 mr-2" />
+                      Generate Summary
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Chat Section */}
+          <div className="bg-white rounded-xl shadow-md overflow-hidden flex flex-col">
+            <div className="bg-indigo-600 px-6 py-4 flex items-center justify-between">
+              <div className="flex items-center">
+                <ChatBubbleLeftRightIcon className="w-6 h-6 text-white mr-2" />
+                <h2 className="text-xl font-semibold text-white">Paper Assistant</h2>
+              </div>
+              {file && (
+                <span className="bg-indigo-700 text-white text-sm px-3 py-1 rounded-full">
+                  {file.name.length > 15 ? `${file.name.substring(0, 15)}...` : file.name}
+                </span>
+              )}
+            </div>
+
+            <div className="flex-1 p-6 overflow-y-auto" style={{ minHeight: '300px', maxHeight: '400px' }}>
+              {messages.length > 0 ? (
+                <div className="space-y-4">
+                  {messages.map((message, index) => (
+                    <div
+                      key={index}
+                      className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}
+                    >
+                      <div
+                        className={`max-w-3/4 rounded-lg px-4 py-2 ${message.sender === 'user'
+                          ? 'bg-indigo-600 text-white rounded-br-none'
+                          : 'bg-gray-100 text-gray-800 rounded-bl-none'}`}
+                      >
+                        {message.text}
+                      </div>
+                    </div>
+                  ))}
+                  <div ref={chatEndRef} />
+                </div>
+              ) : (
+                <div className="h-full flex flex-col items-center justify-center text-center text-gray-500">
+                  <BookOpenIcon className="w-12 h-12 mb-4 text-gray-300" />
+                  <h3 className="text-lg font-medium mb-1">No paper uploaded yet</h3>
+                  <p className="max-w-md">
+                    Upload a research paper to start chatting with the assistant.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="border-t border-gray-200 p-4 bg-gray-50">
+              <form onSubmit={handleSendMessage} className="flex items-center space-x-2">
+                <input
+                  type="text"
+                  value={inputMessage}
+                  onChange={(e) => setInputMessage(e.target.value)}
+                  placeholder={file ? "Ask about the paper..." : "Upload a paper to ask questions"}
+                  className="flex-1 rounded-lg border border-gray-300 px-4 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-100"
+                  disabled={!file}
+                />
+                <button
+                  type="submit"
+                  className="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition duration-300 flex items-center justify-center"
+                  disabled={!file || !inputMessage.trim()}
+                >
+                  Send
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+
+        {/* Right Column - Summary */}
+        <div className="lg:col-span-2">
+          {summary ? (
+            <div className="bg-white rounded-xl shadow-md p-6 h-full">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-semibold text-gray-800 flex items-center">
+                  <BookOpenIcon className="w-5 h-5 mr-2" />
+                  Research Summary
+                </h2>
+                <div className="flex space-x-2">
+                  <button
+                    onClick={downloadSummary}
+                    className="p-2 text-gray-600 hover:text-indigo-600 hover:bg-gray-100 rounded-full"
+                    title="Download summary"
+                  >
+                    <ArrowDownTrayIcon className="w-5 h-5" />
+                  </button>
+                  <button
+                    className="p-2 text-gray-600 hover:text-indigo-600 hover:bg-gray-100 rounded-full"
+                    title="Share summary"
+                  >
+                    <ShareIcon className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+              <div className="prose prose-sm max-w-none">
+                <div className="bg-gray-50 p-6 rounded-lg mb-6">
+                  <p className="text-gray-700 text-lg">{summary.text}</p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="bg-green-50 p-6 rounded-lg">
+                    <h3 className="font-medium text-green-800 text-lg mb-3">Advantages</h3>
+                    <ul className="text-green-700 space-y-2 text-md">
+                      {summary.advantages.map((item, i) => (
+                        <li key={i} className="flex items-start">
+                          <span className="mr-2">•</span> {item}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="bg-red-50 p-6 rounded-lg">
+                    <h3 className="font-medium text-red-800 text-lg mb-3">Limitations</h3>
+                    <ul className="text-red-700 space-y-2 text-md">
+                      {summary.disadvantages.map((item, i) => (
+                        <li key={i} className="flex items-start">
+                          <span className="mr-2">•</span> {item}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-white rounded-xl shadow-md p-12 text-center h-full flex flex-col items-center justify-center">
+              <DocumentArrowUpIcon className="w-16 h-16 text-gray-300 mb-6" />
+              <h3 className="text-xl font-medium text-gray-500 mb-2">No summary available</h3>
+              <p className="text-gray-400 max-w-md">
+                Upload a research paper to generate a detailed summary with advantages and limitations.
+              </p>
+            </div>
+          )}
+        </div>
+      </main>
+
+
+      {/* Features Section */}
+      <section className="bg-white py-12 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-7xl mx-auto">
+          <h2 className="text-3xl font-bold text-center text-gray-900 mb-12">Powerful Features for Researchers</h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+            <div className="bg-gradient-to-br from-indigo-50 to-purple-50 p-6 rounded-xl shadow-sm hover:shadow-md transition duration-300">
+              <div className="bg-indigo-100 w-12 h-12 rounded-lg flex items-center justify-center mb-4">
+                <BookOpenIcon className="w-6 h-6 text-indigo-600" />
+              </div>
+              <h3 className="text-xl font-semibold mb-2 text-gray-800">RAG Model Processing</h3>
+              <p className="text-gray-600">
+                Advanced document processing using Retrieval-Augmented Generation with T5 Architecture and ChromaDB.
+              </p>
+            </div>
+            <div className="bg-gradient-to-br from-green-50 to-teal-50 p-6 rounded-xl shadow-sm hover:shadow-md transition duration-300">
+              <div className="bg-green-100 w-12 h-12 rounded-lg flex items-center justify-center mb-4">
+                <ChatBubbleLeftRightIcon className="w-6 h-6 text-green-600" />
+              </div>
+              <h3 className="text-xl font-semibold mb-2 text-gray-800">Smart Summarization</h3>
+              <p className="text-gray-600">
+                Get concise summaries with key advantages and limitations highlighted.
+              </p>
+            </div>
+            <div className="bg-gradient-to-br from-blue-50 to-cyan-50 p-6 rounded-xl shadow-sm hover:shadow-md transition duration-300">
+              <div className="bg-blue-100 w-12 h-12 rounded-lg flex items-center justify-center mb-4">
+                <ChatBubbleLeftRightIcon className="w-6 h-6 text-blue-600" />
+              </div>
+              <h3 className="text-xl font-semibold mb-2 text-gray-800">Interactive Q&A</h3>
+              <p className="text-gray-600">
+                Ask specific questions about the paper and get accurate responses.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Footer */}
+      <footer className="bg-gray-800 text-white py-8">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
+            <div>
+              <h3 className="text-lg font-semibold mb-4">ResearchAI</h3>
+              <p className="text-gray-400">
+                Advanced research paper summarization using RAG and Transformer models.
+              </p>
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold mb-4">Features</h3>
+              <ul className="space-y-2 text-gray-400">
+                <li>Document Summarization</li>
+                <li>Interactive Q&A</li>
+                <li>Advantages/Limitations</li>
+              </ul>
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold mb-4">Technology</h3>
+              <ul className="space-y-2 text-gray-400">
+                <li>RAG Model</li>
+                <li>T5 Transformers</li>
+                <li>ChromaDB</li>
+              </ul>
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold mb-4">Contact</h3>
+              <ul className="space-y-2 text-gray-400">
+                <li>support@researchai.com</li>
+                <li>ResearchAI Headquarters</li>
+              </ul>
+            </div>
+          </div>
+          <div className="border-t border-gray-700 mt-8 pt-8 text-center text-gray-400">
+            <p>© 2023 ResearchAI. All rights reserved.</p>
+          </div>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+function Login() {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const { login } = useAuth();
+  const navigate = useNavigate();
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email, password }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Login failed');
+      }
+
+      const data = await response.json();
+      login(data.user); // Assuming your API returns user data
+      navigate('/');
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="bg-white p-8 rounded-lg shadow-md w-full max-w-md">
+        <h1 className="text-2xl font-bold text-center mb-6">Login to ResearchAI</h1>
+        {error && <div className="mb-4 text-red-600 text-sm">{error}</div>}
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              placeholder="your@email.com"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              placeholder="••••••••"
+              required
+            />
+          </div>
+          <button
+            type="submit"
+            className="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 transition duration-300"
+          >
+            Login
+          </button>
+        </form>
+        <div className="mt-4 text-center">
+          <p className="text-sm text-gray-600">
+            Don't have an account?{" "}
+            <Link to="/signup" className="text-indigo-600 hover:text-indigo-800">
+              Sign up
+            </Link>
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Signup() {
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [error, setError] = useState('');
+  const { login } = useAuth();
+  const navigate = useNavigate();
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+
+    if (password !== confirmPassword) {
+      setError('Passwords do not match');
+      return;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/signup`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ name, email, password }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Signup failed');
+      }
+
+      const data = await response.json();
+      login(data.user); // Assuming your API returns user data
+      navigate('/');
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="bg-white p-8 rounded-lg shadow-md w-full max-w-md">
+        <h1 className="text-2xl font-bold text-center mb-6">Create an Account</h1>
+        {error && <div className="mb-4 text-red-600 text-sm">{error}</div>}
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              placeholder="John Doe"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              placeholder="your@email.com"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              placeholder="••••••••"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Confirm Password</label>
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              placeholder="••••••••"
+              required
+            />
+          </div>
+          <button
+            type="submit"
+            className="w-full bg-indigo-600 text-white py-2 px-4 rounded-md hover:bg-indigo-700 transition duration-300"
+          >
+            Sign Up
+          </button>
+        </form>
+        <div className="mt-4 text-center">
+          <p className="text-sm text-gray-600">
+            Already have an account?{" "}
+            <Link to="/login" className="text-indigo-600 hover:text-indigo-800">
+              Login
+            </Link>
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function History() {
+  const { user } = useAuth();
+  const [documents, setDocuments] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const fetchHistory = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/history`, {
+          headers: {
+            'Authorization': `Bearer ${user.token}`,
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to fetch history');
+        }
+
+        const data = await response.json();
+        setDocuments(data.documents);
+      } catch (error) {
+        console.error('Error fetching history:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchHistory();
+  }, [user]);
+
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center h-64">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-indigo-500"></div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <header className="bg-gradient-to-r from-purple-600 to-blue-600 shadow-lg">
+        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+          <Link to="/" className="flex items-center space-x-3">
+            <BookOpenIcon className="w-8 h-8 text-white" />
+            <h1 className="text-2xl font-bold text-white">ResearchAI</h1>
+          </Link>
+          <div className="flex items-center space-x-6">
+            <nav className="hidden md:flex space-x-6">
+              <Link to="/history" className="text-white hover:text-purple-200 transition-colors flex items-center">
+                <ClockIcon className="w-5 h-5 mr-1" />
+                History
+              </Link>
+              <Link to="/settings" className="text-white hover:text-purple-200 transition-colors flex items-center">
+                <Cog6ToothIcon className="w-5 h-5 mr-1" />
+                Settings
+              </Link>
+            </nav>
+            <Link to="/login" className="bg-white text-purple-600 px-6 py-2 rounded-full hover:bg-gray-100 shadow-sm transition-all">
+              Login
+            </Link>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
+        <div className="bg-white rounded-xl shadow-md p-6">
+          <h1 className="text-2xl font-bold text-gray-800 mb-6">Document History</h1>
+          {documents.length > 0 ? (
+            <div className="space-y-4">
+              {documents.map((doc) => (
+                <Link 
+                  to={`/history/${doc.id}`} 
+                  key={doc.id}
+                  className="block p-4 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  <div className="flex justify-between items-center">
+                    <h2 className="font-medium">{doc.title}</h2>
+                    <span className="text-sm text-gray-500">{doc.date}</span>
+                  </div>
+                  <p className="text-sm text-gray-600 mt-1 line-clamp-2">{doc.summaryPreview}</p>
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-12">
+              <BookOpenIcon className="mx-auto h-12 w-12 text-gray-400" />
+              <h3 className="mt-2 text-sm font-medium text-gray-900">No documents yet</h3>
+              <p className="mt-1 text-sm text-gray-500">Get started by uploading your first research paper.</p>
+              <div className="mt-6">
+                <Link
+                  to="/"
+                  className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                >
+                  Upload Document
+                </Link>
+              </div>
+            </div>
+          )}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+
+function HistoryDetails() {
+  const { doc_id } = useParams();
+  const [document, setDocument] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setTimeout(() => {
+      setDocument({
+        id: doc_id,
+        title: "Research on AI Ethics",
+        date: "2023-10-15",
+        type: "PDF",
+        summary: {
+          text: "This research paper explores the ethical implications of artificial intelligence in modern society. It covers topics such as algorithmic bias, privacy concerns, and the moral responsibility of AI developers. The paper concludes with recommendations for ethical AI development frameworks.",
+          advantages: [
+            "Comprehensive coverage of AI ethics topics",
+            "Well-researched case studies",
+            "Practical recommendations for developers"
+          ],
+          disadvantages: [
+            "Limited discussion on international policy differences",
+            "Does not address recent developments in generative AI"
+          ]
+        }
+      });
+      setLoading(false);
+    }, 1000);
+  }, [doc_id]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-indigo-500"></div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <header className="bg-gradient-to-r from-purple-600 to-blue-600 shadow-lg">
+        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+          <Link to="/" className="flex items-center space-x-3">
+            <BookOpenIcon className="w-8 h-8 text-white" />
+            <h1 className="text-2xl font-bold text-white">ResearchAI</h1>
+          </Link>
+          <div className="flex items-center space-x-6">
+            <nav className="hidden md:flex space-x-6">
+              <Link to="/history" className="text-white hover:text-purple-200 transition-colors flex items-center">
+                <ClockIcon className="w-5 h-5 mr-1" />
+                History
+              </Link>
+              <Link to="/settings" className="text-white hover:text-purple-200 transition-colors flex items-center">
+                <Cog6ToothIcon className="w-5 h-5 mr-1" />
+                Settings
+              </Link>
+            </nav>
+            <Link to="/login" className="bg-white text-purple-600 px-6 py-2 rounded-full hover:bg-gray-100 shadow-sm transition-all">
+              Login
+            </Link>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
+        <div className="bg-white rounded-xl shadow-md p-6">
+          <div className="flex justify-between items-center mb-6">
+            <div>
+              <h1 className="text-2xl font-bold text-gray-800">{document.title}</h1>
+              <div className="flex items-center mt-2 space-x-4">
+                <span className="text-sm text-gray-500">{document.date}</span>
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                  {document.type}
+                </span>
+              </div>
+            </div>
+            <div className="flex space-x-2">
+              <button className="p-2 text-gray-600 hover:text-indigo-600 hover:bg-gray-100 rounded-full">
+                <ArrowDownTrayIcon className="w-5 h-5" />
+              </button>
+              <button className="p-2 text-gray-600 hover:text-indigo-600 hover:bg-gray-100 rounded-full">
+                <ShareIcon className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+
+          <div className="prose prose-sm max-w-none">
+            <div className="bg-gray-50 p-6 rounded-lg mb-6">
+              <p className="text-gray-700 text-lg">{document.summary.text}</p>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="bg-green-50 p-6 rounded-lg">
+                <h3 className="font-medium text-green-800 text-lg mb-3">Advantages</h3>
+                <ul className="text-green-700 space-y-2 text-md">
+                  {document.summary.advantages.map((item, i) => (
+                    <li key={i} className="flex items-start">
+                      <span className="mr-2">•</span> {item}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div className="bg-red-50 p-6 rounded-lg">
+                <h3 className="font-medium text-red-800 text-lg mb-3">Limitations</h3>
+                <ul className="text-red-700 space-y-2 text-md">
+                  {document.summary.disadvantages.map((item, i) => (
+                    <li key={i} className="flex items-start">
+                      <span className="mr-2">•</span> {item}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}
+
+function Settings() {
+  const [darkMode, setDarkMode] = useState(false);
+  const [notifications, setNotifications] = useState(true);
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <header className="bg-gradient-to-r from-purple-600 to-blue-600 shadow-lg">
+        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+          <Link to="/" className="flex items-center space-x-3">
+            <BookOpenIcon className="w-8 h-8 text-white" />
+            <h1 className="text-2xl font-bold text-white">ResearchAI</h1>
+          </Link>
+          <div className="flex items-center space-x-6">
+            <nav className="hidden md:flex space-x-6">
+              <Link to="/history" className="text-white hover:text-purple-200 transition-colors flex items-center">
+                <ClockIcon className="w-5 h-5 mr-1" />
+                History
+              </Link>
+              <Link to="/settings" className="text-white hover:text-purple-200 transition-colors flex items-center">
+                <Cog6ToothIcon className="w-5 h-5 mr-1" />
+                Settings
+              </Link>
+            </nav>
+            <Link to="/login" className="bg-white text-purple-600 px-6 py-2 rounded-full hover:bg-gray-100 shadow-sm transition-all">
+              Login
+            </Link>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
+        <div className="bg-white rounded-xl shadow-md p-6">
+          <h1 className="text-2xl font-bold text-gray-800 mb-6">Settings</h1>
+          <div className="space-y-8">
+            <div>
+              <h2 className="text-lg font-medium text-gray-900 mb-4">Account</h2>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                  <input
+                    type="email"
+                    value="user@example.com"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-gray-100"
+                    disabled
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                  <input
+                    type="password"
+                    value="••••••••"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-gray-100"
+                    disabled
+                  />
+                </div>
+                <button className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition duration-300">
+                  Update Account
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <h2 className="text-lg font-medium text-gray-900 mb-4">Preferences</h2>
+              <div className="space-y-4">
+                <div className="flex items-center">
+                  <input
+                    type="checkbox"
+                    id="dark-mode"
+                    className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+                    checked={darkMode}
+                    onChange={() => setDarkMode((v) => !v)}
+                  />
+                  <label htmlFor="dark-mode" className="ml-2 block text-sm text-gray-700">
+                    Dark Mode
+                  </label>
+                </div>
+                <div className="flex items-center">
+                  <input
+                    type="checkbox"
+                    id="notifications"
+                    className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+                    checked={notifications}
+                    onChange={() => setNotifications((v) => !v)}
+                  />
+                  <label htmlFor="notifications" className="ml-2 block text-sm text-gray-700">
+                    Email Notifications
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <h2 className="text-lg font-medium text-gray-900 mb-4">Danger Zone</h2>
+              <div className="space-y-4">
+                <button className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition duration-300">
+                  Delete Account
+                </button>
+                <p className="text-sm text-gray-500">
+                  Warning: This action cannot be undone. All your data will be permanently deleted.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}
+function App() {
+  return (
+    <AuthProvider>
+      <Router>
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/signup" element={<Signup />} />
+          <Route 
+            path="/history" 
+            element={
+              <ProtectedRoute>
+                <History />
+              </ProtectedRoute>
+            } 
+          />
+        </Routes>
+      </Router>
+    </AuthProvider>
+  );
+}
+export default App;
